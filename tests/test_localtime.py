@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from babel.localtime import LOCALTZ, get_localzone
+from babel.localtime import LOCALTZ, _get_localzone, get_localzone
 
 _timezones = {
     "Etc/UTC": "UTC",
@@ -21,40 +21,31 @@ _timezones = {
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix tests")
-@pytest.mark.usefixtures("fs")  # provided by 'pyfakefs'
 class TestUnixLocaltime:
-    """ Tests for the `localtime` module in a Unix environment.
-
-    Unix relies heavily on files to configure the system time zone, so the
-    'pyfakefs' library is used here to isolate tests from the local file
-    system: <https://pypi.org/project/pyfakefs/>.
+    """ Unit tests for the `localtime` module in a Unix environment.
 
     """
     @pytest.fixture
-    def zoneinfo(self, fs) -> Path:
-        """ Provide access to the system TZ info directory.
+    def zoneinfo(self) -> Path:
+        """ Get the system TZ info directory.
 
         :return: directory path
         """
-        # Reproducing a working zoneinfo database in the test environment would
-        # be a hassle, so add access to the system database. This assumes the
-        # test system follows the convention of linking `/etc/localtime` to the
-        # system's TZ info file somewhere in a `zoneinfo/` hierarchy.
+        # This assumes the test system follows the convention of linking
+        # `/etc/localtime` to the system's timezone info file somewhere in a
+        # `zoneinfo/` hierarchy.
         # <https://www.unix.com/man-page/linux/4/zoneinfo>
-        fs.add_real_symlink("/etc/localtime")
         parts = list(Path("/etc/localtime").readlink().parts)
         while parts and parts[-1] != "zoneinfo":
             # Find the 'zoneinfo' root.
             del parts[-1]
-        zoneinfo = Path(*parts)
-        fs.add_real_directory(zoneinfo)
-        return zoneinfo
+        return Path(*parts)
 
     @pytest.fixture(params=_timezones.items())
-    def timezone(self, zoneinfo, request) -> str:
-        """ Set the test time zone.
+    def timezone(self, tmp_path, zoneinfo, request) -> str:
+        """ Set the test time zone using an etc/localtime file.
 
-        :return: time zone name, *i.e..* ZoneInfo.tzname()
+        :return: time zone name, *i.e.* ZoneInfo.tzname()
         """
         # As with the `zoneinfo` fixture, this assumes the test system uses a
         # standard-ish Unix implementation where `/etc/localtime` can be used
@@ -68,18 +59,22 @@ class TestUnixLocaltime:
         # 'localtime' can handle them.
         # <https://github.com/python-babel/babel/issues/990>.
         key, name = request.param
-        os.remove("/etc/localtime")
-        os.symlink(f"{zoneinfo}//{key}", "/etc/localtime")  # double slash OK
+        etc = tmp_path.joinpath("etc")
+        etc.mkdir(parents=True)
+        os.symlink(f"{zoneinfo}//{key}", etc.joinpath("localtime"))  # double slash OK
         return name
 
-    def test_get_localzone(self, zoneinfo, timezone):
+    def test_get_localzone(self, tmp_path, timezone):
         """ Test the get_localtime() function.
 
         """
+        # This actually tests _get_localzone(), which takes an optional root
+        # path that is intended for use with tests. As of this writing, the
+        # public get_localzone() function is a wrapper for _get_localzone('/').
         dst = datetime.datetime(2023, 7, 1)  # testing DST time zone names
-        assert get_localzone().tzname(dst) == timezone
+        assert _get_localzone(str(tmp_path)).tzname(dst) == timezone
 
-    def test_localtz(self, zoneinfo):
+    def test_localtz(self):
         """ Test the LOCALTZ module attribute.
 
         """
@@ -97,4 +92,4 @@ class TestWin32Localtime:
         """ Test the LOCALTZ module attribute.
 
         """
-        assert get_localzone() == LOCALTZ
+        assert _get_localzone() == LOCALTZ

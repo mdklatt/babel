@@ -42,7 +42,8 @@ def _get_localzone(_root: str = '/') -> datetime.tzinfo:
         # Make sure the path is normalized so that it will be parsed correctly
         # below, e.g. 'Etc//UTC' is a valid path but not a valid zoneinfo key.
         # <https://github.com/python-babel/babel/issues/990>
-        link_dst = os.path.realpath('/etc/localtime')
+        localtime = os.path.join(_root, 'etc/localtime')
+        link_dst = os.path.realpath(localtime)
     except OSError:
         pass
     else:

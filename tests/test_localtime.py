@@ -5,6 +5,8 @@ executed.
 
 """
 import datetime
+import itertools
+import os
 import os.path
 import sys
 from pathlib import Path
@@ -41,37 +43,56 @@ class TestUnixLocaltime:
             del parts[-1]
         return Path(*parts)
 
-    @pytest.fixture(params=_timezones.items())
-    def timezone(self, tmp_path, zoneinfo, request) -> str:
-        """ Set the test time zone using an etc/localtime file.
+    @pytest.fixture
+    def environ(self):
+        """ Restore os.environ after a test.
 
-        :return: time zone name, *i.e.* ZoneInfo.tzname()
         """
-        # As with the `zoneinfo` fixture, this assumes the test system uses a
-        # standard-ish Unix implementation where `/etc/localtime` can be used
-        # to set the time zone.
-        # <https://www.unix.com/man-page/linux/4/zoneinfo>
-        #
-        # Note the double slash in the symlink source. Because os.symlink()
-        # does not normalize paths, this will appear on the file system as
-        # e.g. `zoneinfo//Etc/UTC`. Although irregular, this is a valid link
-        # and has been observed in certain Ubuntu installations, so make sure
-        # 'localtime' can handle them.
-        # <https://github.com/python-babel/babel/issues/990>.
-        key, name = request.param
-        etc = tmp_path.joinpath("etc")
-        etc.mkdir(parents=True)
-        os.symlink(f"{zoneinfo}//{key}", etc.joinpath("localtime"))  # double slash OK
-        return name
+        system_environ = dict(os.environ)
+        yield
+        os.environ.clear()
+        os.environ.update(system_environ)
+        return
+
+    @pytest.mark.usefixtures("environ")
+    @pytest.fixture(params=itertools.product(_timezones.items(), (True, False)))
+    def timezone(self, tmp_path, request, zoneinfo):
+        """ Set a test time zone via environment variable or file.
+
+        :yield: time zone name, *i.e.* ZoneInfo.tzname()
+        """
+        (tzkey, tzname), use_tzenv = request.param
+        if use_tzenv:
+            # The `TZ` environment variable is prioritized over all other
+            # methods of setting the time zone, so this should be sufficient to
+            # override the system time zone regardless of /etc/localtime, etc.
+            os.environ["TZ"] = tzkey
+        else:
+            # Set the timezone via an etc/localtime file. Note the double slash
+            # in the symlink source. Because os.symlink() does not normalize
+            # paths, this will appear on the file system itself, e.g.
+            # `zoneinfo//Etc/UTC`. Although  irregular, this is a valid link
+            # and has been observed in certain Ubuntu installations, so make
+            # sure the 'localtime' module can handle them.
+            # <https://github.com/python-babel/babel/issues/990>.
+            try:
+                del os.environ["TZ"]  # make sure /etc/localtime has priority
+            except KeyError:
+                pass
+            etc = tmp_path.joinpath("etc")
+            etc.mkdir(parents=True)
+            os.symlink(f"{zoneinfo}//{tzkey}", etc.joinpath("localtime"))
+        yield tzname
+        return
 
     def test_get_localzone(self, tmp_path, timezone):
-        """ Test the get_localtime() function.
+        """ Test the get_localzone() function.
 
         """
         # This actually tests _get_localzone(), which takes an optional root
         # path that is intended for use with tests. As of this writing, the
         # public get_localzone() function is a wrapper for _get_localzone('/').
-        dst = datetime.datetime(2023, 7, 1)  # testing DST time zone names
+        dst = datetime.datetime(2023, 7, 1)  # testing DST names
         assert _get_localzone(str(tmp_path)).tzname(dst) == timezone
 
     def test_localtz(self):
@@ -79,6 +100,7 @@ class TestUnixLocaltime:
 
         """
         assert get_localzone() == LOCALTZ
+        return
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 tests")
@@ -92,4 +114,5 @@ class TestWin32Localtime:
         """ Test the LOCALTZ module attribute.
 
         """
-        assert _get_localzone() == LOCALTZ
+        assert get_localzone() == LOCALTZ
+        return
